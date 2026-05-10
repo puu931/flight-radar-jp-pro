@@ -22,7 +22,7 @@ routes:
 
 filters:
   direct_only: true
-  baggage_required: true
+  baggage_required: false   # Travelpayouts/cheap-aggregator 不回傳行李資訊；自己訂票時再核對
   avoid_red_eye: true
   departure_after: "08:00"
   arrival_before: "22:30"

@@ -20,6 +20,9 @@ def _build_sources() -> list[FlightSource]:
             elif name == "amadeus":
                 from .amadeus import AmadeusSource
                 sources.append(AmadeusSource())
+            elif name == "travelpayouts":
+                from .travelpayouts import TravelpayoutsSource
+                sources.append(TravelpayoutsSource())
             else:
                 log.warning("Unknown flight source %r — skipping", name)
         except Exception as e:

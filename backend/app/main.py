@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,6 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import alerts, calendar, flights, notifier, settings, trends
 from .db import init_db
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+# Silence httpx's per-request URL logs — they leak query-string secrets.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @asynccontextmanager
