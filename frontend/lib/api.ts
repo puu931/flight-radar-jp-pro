@@ -43,6 +43,25 @@ export type Alert = {
   message: string;
 };
 
+export type RoundTrip = {
+  id: number;
+  origin: string;
+  destination: string;
+  out_departure_at: string;
+  return_departure_at: string;
+  stay_days: number;
+  out_airline: string;
+  return_airline: string;
+  out_flight_number: string;
+  return_flight_number: string;
+  out_price_twd: number;
+  return_price_twd: number;
+  total_price_twd: number;
+  out_deep_link: string;
+  return_deep_link: string;
+  fetched_at: string;
+};
+
 export type Settings = {
   airlines: string[];
   routes: { origin: string; destination: string; max_price: number }[];
@@ -75,6 +94,7 @@ export const apiUrls = {
   alerts: (limit = 100) => `/api/alerts?limit=${limit}`,
   scan: (notify = false) => `/api/flights/scan?notify=${notify}`,
   testNotify: () => `/api/notifier/test`,
+  roundTrips: (limit = 20) => `/api/round_trips?limit=${limit}`,
 };
 
 export async function triggerScan(notify = false): Promise<unknown> {

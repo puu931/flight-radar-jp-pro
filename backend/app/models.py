@@ -61,6 +61,28 @@ class AlertLog(Base):
     message: Mapped[str] = mapped_column(String(2000), default="")
 
 
+class RoundTrip(Base):
+    __tablename__ = "round_trips"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    origin: Mapped[str] = mapped_column(String(8), index=True)         # TPE
+    destination: Mapped[str] = mapped_column(String(8), index=True)    # NRT
+    out_departure_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    return_departure_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    stay_days: Mapped[int] = mapped_column(Integer)
+    out_airline: Mapped[str] = mapped_column(String(8), index=True)
+    return_airline: Mapped[str] = mapped_column(String(8), index=True)
+    out_flight_number: Mapped[str] = mapped_column(String(16))
+    return_flight_number: Mapped[str] = mapped_column(String(16))
+    out_price_twd: Mapped[float] = mapped_column(Float)
+    return_price_twd: Mapped[float] = mapped_column(Float)
+    total_price_twd: Mapped[float] = mapped_column(Float, index=True)
+    out_deep_link: Mapped[str] = mapped_column(String(1024), default="")
+    return_deep_link: Mapped[str] = mapped_column(String(1024), default="")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class User(Base):
     __tablename__ = "users"
 

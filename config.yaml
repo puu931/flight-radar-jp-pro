@@ -3,22 +3,32 @@ airlines:
   - JX   # Starlux
   - CI   # China Airlines
 
+trip:
+  type: round_trip          # round_trip | one_way
+  stay_days: [4, 5, 6, 7]
+  top_n_alerts: 5           # alert only the N cheapest combos per scan
+
 routes:
   - origin: TPE
     destination: NRT
-    max_price: 10000
+    max_price: 10000        # one-way fallback
+    max_round_trip: 18000
   - origin: TPE
     destination: HND
     max_price: 11500
+    max_round_trip: 21000
   - origin: TPE
     destination: KIX
     max_price: 9500
+    max_round_trip: 17000
   - origin: TPE
     destination: FUK
     max_price: 12000
+    max_round_trip: 22000
   - origin: TPE
     destination: OKA
     max_price: 11000
+    max_round_trip: 20000
 
 filters:
   direct_only: true

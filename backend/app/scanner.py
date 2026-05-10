@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete
@@ -10,7 +9,8 @@ from .config import AppConfig, Route, get_config
 from .db import session_scope
 from .filters import passes_filters
 from .models import Flight, PriceHistory
-from .notifier import send_alert
+from .notifier import send_alert, send_round_trip_alert
+from .round_trips import build_round_trips, top_cheapest
 from .sources.aggregator import Aggregator
 from .sources.base import FlightOffer
 
@@ -21,7 +21,6 @@ def _persist_offers(offers: list[FlightOffer]) -> None:
     if not offers:
         return
     with session_scope() as db:
-        # Reset flights for the (origin, destination, departure_date) keys we just refreshed
         keys = {(o.origin, o.destination, o.departure_at.date()) for o in offers}
         for origin, destination, dep_date in keys:
             db.execute(
@@ -53,7 +52,6 @@ def _persist_offers(offers: list[FlightOffer]) -> None:
 def _record_price_history(offers: list[FlightOffer]) -> None:
     if not offers:
         return
-    # Aggregate min price per (origin, dest, dep_date, airline)
     by_key: dict[tuple[str, str, str, str], float] = {}
     for o in offers:
         key = (o.origin, o.destination, o.departure_at.date().isoformat(), o.airline)
@@ -69,18 +67,18 @@ def _record_price_history(offers: list[FlightOffer]) -> None:
             ))
 
 
-def scan_route(
+def _scan_route_direction(
     aggregator: Aggregator,
     cfg: AppConfig,
-    route: Route,
+    origin: str,
+    destination: str,
     days: int,
 ) -> list[FlightOffer]:
     today = date.today()
     found: list[FlightOffer] = []
     for offset in range(1, days + 1):
         dep_date = today + timedelta(days=offset)
-        offers = aggregator.search(route.origin, route.destination, dep_date)
-        # Apply whitelist + filters
+        offers = aggregator.search(origin, destination, dep_date)
         kept = [o for o in offers if passes_filters(o, cfg)]
         found.extend(kept)
     return found
@@ -89,34 +87,65 @@ def scan_route(
 def scan_all(notify: bool = True) -> dict:
     cfg = get_config()
     aggregator = Aggregator()
-    summary: dict = {"routes": [], "alerts_sent": 0, "total_offers": 0}
+    summary: dict = {
+        "routes": [],
+        "alerts_sent": 0,
+        "total_offers": 0,
+        "round_trips": 0,
+        "round_trip_alerts_sent": 0,
+    }
 
     all_offers: list[FlightOffer] = []
+    is_round_trip = cfg.trip.type == "round_trip"
+
     for route in cfg.routes:
-        offers = scan_route(aggregator, cfg, route, cfg.search.future_days)
-        all_offers.extend(offers)
+        out_offers = _scan_route_direction(
+            aggregator, cfg, route.origin, route.destination, cfg.search.future_days,
+        )
+        all_offers.extend(out_offers)
 
-        # alerts: any offer ≤ max_price triggers
-        alerts = [o for o in offers if o.price_twd <= route.max_price]
-        # cheapest per (date, airline) only — reduce noise
-        deduped_alerts = _cheapest_per_day_airline(alerts)
+        in_offers: list[FlightOffer] = []
+        if is_round_trip:
+            in_offers = _scan_route_direction(
+                aggregator, cfg, route.destination, route.origin, cfg.search.future_days,
+            )
+            all_offers.extend(in_offers)
 
+        # One-way alerts only fire when not in round-trip mode (avoids duplicate noise).
         sent = 0
-        if notify:
-            for o in deduped_alerts:
-                if send_alert(o):
-                    sent += 1
+        single_alerts: list[FlightOffer] = []
+        if not is_round_trip:
+            single_alerts = [o for o in out_offers if o.price_twd <= route.max_price]
+            single_alerts = _cheapest_per_day_airline(single_alerts)
+            if notify:
+                for o in single_alerts:
+                    if send_alert(o):
+                        sent += 1
+
         summary["routes"].append({
             "route": f"{route.origin}-{route.destination}",
-            "offers": len(offers),
-            "alerts": len(deduped_alerts),
-            "alerts_sent": sent,
+            "out_offers": len(out_offers),
+            "in_offers": len(in_offers),
+            "single_leg_alerts_sent": sent,
         })
         summary["alerts_sent"] += sent
 
     summary["total_offers"] = len(all_offers)
     _persist_offers(all_offers)
     _record_price_history(all_offers)
+
+    # Round-trip pairing + top-N alerts
+    if is_round_trip:
+        build_round_trips(cfg)
+        top = top_cheapest(cfg.trip.top_n_alerts)
+        summary["round_trips"] = len(top)
+        sent_rt = 0
+        if notify:
+            for rt in top:
+                if send_round_trip_alert(rt):
+                    sent_rt += 1
+        summary["round_trip_alerts_sent"] = sent_rt
+
     log.info("Scan complete: %s", summary)
     return summary
 

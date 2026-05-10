@@ -19,6 +19,7 @@ class Route:
     origin: str
     destination: str
     max_price: int
+    max_round_trip: int = 0  # 0 = use 2 * max_price as fallback
 
 
 @dataclass
@@ -39,6 +40,13 @@ class SearchSettings:
 
 
 @dataclass
+class TripSettings:
+    type: str = "round_trip"  # round_trip | one_way
+    stay_days: list[int] = field(default_factory=lambda: [4, 5, 6, 7])
+    top_n_alerts: int = 5
+
+
+@dataclass
 class NotificationSettings:
     cooldown_hours: int = 24
     dedupe: bool = True
@@ -50,6 +58,7 @@ class AppConfig:
     routes: list[Route]
     filters: Filters
     search: SearchSettings
+    trip: TripSettings
     notification: NotificationSettings
 
     @classmethod
@@ -60,6 +69,7 @@ class AppConfig:
             routes=[Route(**r) for r in raw.get("routes", [])],
             filters=Filters(**raw.get("filters", {})),
             search=SearchSettings(**raw.get("search", {})),
+            trip=TripSettings(**raw.get("trip", {})),
             notification=NotificationSettings(**raw.get("notification", {})),
         )
 

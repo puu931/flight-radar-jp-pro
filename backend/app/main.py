@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import alerts, calendar, flights, notifier, settings, trends
+from .api import alerts, calendar, flights, notifier, round_trips, settings, trends
 from .db import init_db
 
 logging.basicConfig(
@@ -49,6 +49,7 @@ app.include_router(trends.router, prefix="/api/trends", tags=["trends"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(notifier.router, prefix="/api/notifier", tags=["notifier"])
+app.include_router(round_trips.router, prefix="/api/round_trips", tags=["round_trips"])
 
 
 if __name__ == "__main__":
