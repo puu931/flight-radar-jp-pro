@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Flight Radar JP Pro — local cron via launchd.
+
+  Schedules `python scripts/scan.py` at 09:00 / 15:00 / 23:00 every day.
+  Writes scan results into the database configured in ../.env (Postgres for
+  production, SQLite for local). HND data tends to come back from a
+  residential IP where it gets blocked from GH Actions.
+
+  Install:
+    cp scripts/com.puu931.flightradar.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.puu931.flightradar.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.puu931.flightradar.plist
+    rm ~/Library/LaunchAgents/com.puu931.flightradar.plist
+
+  Tail logs:
+    tail -f ~/Downloads/flight-radar-jp-pro/logs/scan.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.puu931.flightradar</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/joseph/Downloads/flight-radar-jp-pro/.venv/bin/python</string>
+    <string>/Users/joseph/Downloads/flight-radar-jp-pro/scripts/scan.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/joseph/Downloads/flight-radar-jp-pro</string>
+
+  <!-- Don't run on load (avoid surprise scrape when you re-install). -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- 09:00 / 15:00 / 23:00 local time, every day -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>15</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>23</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+  </array>
+
+  <!-- If the Mac was asleep, run when it wakes. -->
+  <key>StartOnMount</key>
+  <false/>
+
+  <!-- Stdout / stderr go to log files (rotated manually if needed). -->
+  <key>StandardOutPath</key>
+  <string>/Users/joseph/Downloads/flight-radar-jp-pro/logs/scan.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/joseph/Downloads/flight-radar-jp-pro/logs/scan.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

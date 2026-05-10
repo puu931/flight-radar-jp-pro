@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 
 from .config import AppConfig, Route
 from .db import session_scope
-from .models import Flight, RoundTrip
+from .models import Flight, RoundTrip, RoundTripHistory
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +83,16 @@ def build_round_trips(cfg: AppConfig) -> list[RoundTrip]:
             log.info("RoundTrip %s↔%s: out=%d in=%d → %d combos under %s",
                      route.origin, route.destination,
                      len(out_flights), len(in_flights), len(combos), int(max_total))
+
+            # Append a history row so trends can chart min round-trip price per scan.
+            if combos:
+                min_total = min(c["total"] for c in combos)
+                db.add(RoundTripHistory(
+                    origin=route.origin,
+                    destination=route.destination,
+                    min_total_twd=min_total,
+                    sample_count=len(combos),
+                ))
 
             for c in combos:
                 out, ret = c["out"], c["ret"]

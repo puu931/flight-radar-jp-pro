@@ -22,7 +22,7 @@ export default function CalendarPage() {
       <header>
         <h1 className="text-2xl font-bold">📅 低價日曆</h1>
         <p className="text-sm text-slate-400 mt-1">
-          顏色越深越貴 — 一眼看哪天最便宜
+          顏色越深越貴 — 該日出發的<b>來回最便宜總價</b>（停留 4-7 天）
         </p>
       </header>
 

@@ -38,7 +38,7 @@ jobs:
           TRAVELPAYOUTS_MARKER: ${{ vars.TRAVELPAYOUTS_MARKER }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           FLIGHT_SOURCES: ${{ vars.FLIGHT_SOURCES || 'mock' }}
-          DATABASE_URL: sqlite:///./flights.db
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'sqlite:///./flights.db' }}
         run: python scripts/scan.py
 
       - name: Commit price history

@@ -86,10 +86,10 @@ export const apiUrls = {
     const s = q.toString();
     return `/api/flights${s ? `?${s}` : ""}`;
   },
-  calendar: (origin: string, destination: string, days = 90) =>
-    `/api/calendar?origin=${origin}&destination=${destination}&days=${days}`,
-  trends: (origin: string, destination: string, airline?: string) =>
-    `/api/trends?origin=${origin}&destination=${destination}${airline ? `&airline=${airline}` : ""}`,
+  calendar: (origin: string, destination: string, days = 90, mode: "round_trip" | "one_way" = "round_trip") =>
+    `/api/calendar?origin=${origin}&destination=${destination}&days=${days}&mode=${mode}`,
+  trends: (origin: string, destination: string, airline?: string, mode: "round_trip" | "one_way" = "round_trip") =>
+    `/api/trends?origin=${origin}&destination=${destination}&mode=${mode}${airline ? `&airline=${airline}` : ""}`,
   settings: () => `/api/settings`,
   alerts: (limit = 100) => `/api/alerts?limit=${limit}`,
   scan: (notify = false) => `/api/flights/scan?notify=${notify}`,

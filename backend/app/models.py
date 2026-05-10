@@ -83,6 +83,17 @@ class RoundTrip(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class RoundTripHistory(Base):
+    __tablename__ = "round_trip_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    origin: Mapped[str] = mapped_column(String(8), index=True)
+    destination: Mapped[str] = mapped_column(String(8), index=True)
+    min_total_twd: Mapped[float] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class User(Base):
     __tablename__ = "users"
 

@@ -1,0 +1,30 @@
+# Render service definition. After creating account, just import this repo.
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: flight-radar-jp-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false       # set in Render dashboard (Supabase Postgres URL)
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: TRAVELPAYOUTS_TOKEN
+        sync: false
+      - key: TRAVELPAYOUTS_MARKER
+        sync: false
+      - key: FLIGHT_SOURCES
+        value: travelpayouts          # web tier doesn't run scrapers; cron does
+      - key: PYTHONUNBUFFERED
+        value: "1"
