@@ -180,7 +180,7 @@ class GoogleFlightsSource(FlightSource):
             page = await ctx.new_page()
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(8000)
                 # Best-effort: expand "其他航班"
                 try:
                     btns = await page.query_selector_all("button")
@@ -188,12 +188,27 @@ class GoogleFlightsSource(FlightSource):
                         txt = (await b.inner_text() or "").strip()
                         if "其他航班" in txt or "more flights" in txt.lower():
                             await b.click()
-                            await page.wait_for_timeout(1500)
+                            await page.wait_for_timeout(2500)
                             break
                 except Exception:
                     pass
 
-                cards = page.locator('[aria-label*="航班"]')
+                # Scroll to encourage lazy-loaded cards (Google sometimes gates more
+                # results behind viewport visibility for low-trust clients).
+                cards_locator = page.locator('[aria-label*="航班"]')
+                last_count = 0
+                for _ in range(4):
+                    try:
+                        await page.evaluate("window.scrollBy(0, 800)")
+                    except Exception:
+                        break
+                    await page.wait_for_timeout(1500)
+                    cur = await cards_locator.count()
+                    if cur == last_count:
+                        break
+                    last_count = cur
+
+                cards = cards_locator
                 n = await cards.count()
                 seen_keys: set[tuple] = set()
                 for i in range(min(n, 100)):
