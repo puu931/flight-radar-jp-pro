@@ -11,24 +11,24 @@ trip:
 routes:
   - origin: TPE
     destination: NRT
-    max_price: 10000        # one-way fallback
-    max_round_trip: 18000
+    max_price: 10000
+    max_round_trip: 19000   # floor 16,627 + 15%
   - origin: TPE
     destination: HND
     max_price: 11500
-    max_round_trip: 21000
+    max_round_trip: 22500   # floor 19,649 + 15%
   - origin: TPE
     destination: KIX
     max_price: 9500
-    max_round_trip: 17000
+    max_round_trip: 21000   # floor 18,271 + 15%
   - origin: TPE
     destination: FUK
     max_price: 12000
-    max_round_trip: 22000
+    max_round_trip: 21500   # floor 18,841 + 15%
   - origin: TPE
     destination: OKA
     max_price: 11000
-    max_round_trip: 20000
+    max_round_trip: 16500   # floor 14,216 + 15%
 
 filters:
   direct_only: true
