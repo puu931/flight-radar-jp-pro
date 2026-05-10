@@ -50,9 +50,9 @@ SAMPLE_OFFSETS = [7, 14, 21, 30, 45, 60, 75]
 
 
 def _parse_zh_time(s: str) -> Optional[time]:
-    """Parse '下午2:25', '上午11:00', '中午12:10', '晚上7:25', '清晨6:35'."""
+    """Parse '下午2:25', '上午11:00', '中午12:10', '晚上7:25', '清晨6:35', '凌晨12:45'."""
     s = s.strip()
-    m = re.match(r"(清晨|早上|上午|中午|下午|晚上)?\s*(\d{1,2}):(\d{2})", s)
+    m = re.match(r"(凌晨|清晨|早上|上午|中午|下午|晚上)?\s*(\d{1,2}):(\d{2})", s)
     if not m:
         return None
     period, hh, mm = m.group(1), int(m.group(2)), int(m.group(3))
@@ -62,15 +62,17 @@ def _parse_zh_time(s: str) -> Optional[time]:
         hh = 12
     if period in ("上午", "早上", "清晨") and hh == 12:
         hh = 0
+    if period == "凌晨" and hh == 12:
+        hh = 0  # 凌晨12:45 means 00:45
     if hh > 23 or mm > 59:
         return None
     return time(hh, mm)
 
 
-def _parse_duration_minutes(s: str) -> int:
-    """'3 小時 10 分鐘' → 190."""
-    h = re.search(r"(\d+)\s*小時", s)
-    m = re.search(r"(\d+)\s*分鐘", s)
+def _parse_duration_minutes(label: str) -> int:
+    """Find '3 小時 10 分鐘' anywhere in label → 190."""
+    h = re.search(r"(\d+)\s*小時", label)
+    m = re.search(r"(\d+)\s*分鐘", label)
     return int(h.group(1) if h else 0) * 60 + int(m.group(1) if m else 0)
 
 
@@ -85,9 +87,8 @@ def _parse_aria_label(label: str, dep_date: date) -> Optional[dict]:
     price_m = re.search(r"([\d,]+)\s*新台幣", label)
     airline_m = re.search(r"搭乘([^的]+?)的", label)
     direct = "直達" in label
-    dep_time_m = re.search(r"(?:^|\s|，)((?:清晨|早上|上午|中午|下午|晚上)?\s*\d{1,2}:\d{2})\s*於", label)
-    arr_time_m = re.search(r"((?:清晨|早上|上午|中午|下午|晚上)?\s*\d{1,2}:\d{2})\s*抵達", label)
-    duration_m = re.search(r"總交通時間[:：]\s*([^選]+?)(?:\s|$|選)", label)
+    dep_time_m = re.search(r"(?:^|\s|，)((?:凌晨|清晨|早上|上午|中午|下午|晚上)?\s*\d{1,2}:\d{2})\s*於", label)
+    arr_time_m = re.search(r"((?:凌晨|清晨|早上|上午|中午|下午|晚上)?\s*\d{1,2}:\d{2})\s*抵達", label)
     if not (price_m and airline_m and dep_time_m and arr_time_m):
         return None
     price = int(price_m.group(1).replace(",", ""))
@@ -96,7 +97,7 @@ def _parse_aria_label(label: str, dep_date: date) -> Optional[dict]:
     arr_t = _parse_zh_time(arr_time_m.group(1))
     if not dep_t or not arr_t:
         return None
-    duration = _parse_duration_minutes(duration_m.group(1) if duration_m else "")
+    duration = _parse_duration_minutes(label)
     return {
         "price": price,
         "airline_name": airline_name,

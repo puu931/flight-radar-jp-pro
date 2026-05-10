@@ -6,19 +6,19 @@ airlines:
 routes:
   - origin: TPE
     destination: NRT
-    max_price: 9000
+    max_price: 10000
   - origin: TPE
     destination: HND
-    max_price: 9500
+    max_price: 11500
   - origin: TPE
     destination: KIX
-    max_price: 8500
+    max_price: 9500
   - origin: TPE
     destination: FUK
-    max_price: 7500
+    max_price: 12000
   - origin: TPE
     destination: OKA
-    max_price: 6500
+    max_price: 11000
 
 filters:
   direct_only: true
