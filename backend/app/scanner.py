@@ -111,6 +111,11 @@ def scan_all(notify: bool = True) -> dict:
             )
             all_offers.extend(in_offers)
 
+        # Commit per route so a kill/timeout mid-scan doesn't lose hours of work.
+        route_offers = out_offers + in_offers
+        _persist_offers(route_offers)
+        _record_price_history(route_offers)
+
         # One-way alerts only fire when not in round-trip mode (avoids duplicate noise).
         sent = 0
         single_alerts: list[FlightOffer] = []
@@ -131,8 +136,6 @@ def scan_all(notify: bool = True) -> dict:
         summary["alerts_sent"] += sent
 
     summary["total_offers"] = len(all_offers)
-    _persist_offers(all_offers)
-    _record_price_history(all_offers)
 
     # Round-trip pairing + top-N alerts
     if is_round_trip:
