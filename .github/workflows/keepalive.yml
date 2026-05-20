@@ -1,0 +1,31 @@
+name: Supabase Keep-Alive
+
+# Free-tier Supabase auto-pauses after 7 days without DB activity.
+# Hit an endpoint that issues a real query so the project stays active.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC = 12:00 JST, every day
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /api/flights (reads DB)
+        run: |
+          set -e
+          # Render free tier cold-starts can take ~60s; retry with backoff.
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /tmp/resp.json -w "%{http_code}" --max-time 90 \
+              "https://flight-radar-jp-api.onrender.com/api/flights?limit=1")
+            echo "attempt=$attempt http=$code"
+            if [ "$code" = "200" ]; then
+              head -c 200 /tmp/resp.json; echo
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "All attempts failed"
+          exit 1
