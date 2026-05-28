@@ -1,7 +1,9 @@
 name: Supabase Keep-Alive
 
-# Free-tier Supabase auto-pauses after 7 days without DB activity.
-# Hit an endpoint that issues a real query so the project stays active.
+# Free-tier Supabase auto-pauses after 7 days without API activity.
+# Note: "activity" here means hits to Supabase's own APIs (PostgREST / Auth),
+# NOT raw Postgres connections from our backend. So we ping /auth/v1/health
+# directly — that's what the pause-watcher actually counts.
 
 on:
   schedule:
@@ -11,21 +13,17 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 2
     steps:
-      - name: Ping /api/flights (reads DB)
+      - name: Ping Supabase auth health
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           set -e
-          # Render free tier cold-starts can take ~60s; retry with backoff.
-          for attempt in 1 2 3; do
-            code=$(curl -s -o /tmp/resp.json -w "%{http_code}" --max-time 90 \
-              "https://flight-radar-jp-api.onrender.com/api/flights?limit=1")
-            echo "attempt=$attempt http=$code"
-            if [ "$code" = "200" ]; then
-              head -c 200 /tmp/resp.json; echo
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "All attempts failed"
-          exit 1
+          code=$(curl -s -o /tmp/resp.json -w "%{http_code}" --max-time 30 \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            "$SUPABASE_URL/auth/v1/health")
+          echo "http=$code"
+          head -c 200 /tmp/resp.json; echo
+          [ "$code" = "200" ] || exit 1

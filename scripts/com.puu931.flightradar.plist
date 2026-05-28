@@ -17,7 +17,7 @@
     rm ~/Library/LaunchAgents/com.puu931.flightradar.plist
 
   Tail logs:
-    tail -f ~/Downloads/flight-radar-jp-pro/logs/scan.log
+    tail -f /tmp/flightradar-scan.log
 -->
 <plist version="1.0">
 <dict>
@@ -26,12 +26,12 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/joseph/Downloads/flight-radar-jp-pro/.venv/bin/python</string>
-    <string>/Users/joseph/Downloads/flight-radar-jp-pro/scripts/scan.py</string>
+    <string>/Users/joseph/Projects/flight-radar-jp-pro/.venv/bin/python</string>
+    <string>/Users/joseph/Projects/flight-radar-jp-pro/scripts/scan.py</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/joseph/Downloads/flight-radar-jp-pro</string>
+  <string>/Users/joseph/Projects/flight-radar-jp-pro</string>
 
   <!-- Don't run on load (avoid surprise scrape when you re-install). -->
   <key>RunAtLoad</key>
@@ -60,14 +60,20 @@
 
   <!-- Stdout / stderr go to log files (rotated manually if needed). -->
   <key>StandardOutPath</key>
-  <string>/Users/joseph/Downloads/flight-radar-jp-pro/logs/scan.log</string>
+  <string>/tmp/flightradar-scan.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/joseph/Downloads/flight-radar-jp-pro/logs/scan.err.log</string>
+  <string>/tmp/flightradar-scan.err.log</string>
 
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
     <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- Without HOME, Playwright can't find its Chromium cache (~/Library/Caches/ms-playwright). -->
+    <key>HOME</key>
+    <string>/Users/joseph</string>
+    <!-- Flush stdout/stderr so logs/scan.log shows progress live (not at process exit). -->
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
   </dict>
 </dict>
 </plist>
