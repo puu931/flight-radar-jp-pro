@@ -1,13 +1,17 @@
 name: Supabase Keep-Alive
 
-# Free-tier Supabase auto-pauses after 7 days without API activity.
-# Note: "activity" here means hits to Supabase's own APIs (PostgREST / Auth),
-# NOT raw Postgres connections from our backend. So we ping /auth/v1/health
-# directly — that's what the pause-watcher actually counts.
+# Free-tier Supabase auto-pauses after 7 days of "inactivity".
+# Empirically, hits to /auth/v1/health (an internal health endpoint) do NOT count
+# — we tried that for a week and the project still got paused. What does count:
+# a real PostgREST query that returns rows. We keep a one-row keepalive_ping
+# table with anon SELECT access and query it twice a day.
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # 03:00 UTC = 12:00 JST, every day
+    # Twice a day to survive GH Actions cron jitter / skips. Off-minute on
+    # purpose — :00 / :30 are the most contested slots.
+    - cron: "17 3 * * *"
+    - cron: "47 15 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -15,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Ping Supabase auth health
+      - name: Query keepalive_ping via PostgREST
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -23,7 +27,11 @@ jobs:
           set -e
           code=$(curl -s -o /tmp/resp.json -w "%{http_code}" --max-time 30 \
             -H "apikey: $SUPABASE_ANON_KEY" \
-            "$SUPABASE_URL/auth/v1/health")
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "$SUPABASE_URL/rest/v1/keepalive_ping?select=id&limit=1")
           echo "http=$code"
-          head -c 200 /tmp/resp.json; echo
+          head -c 300 /tmp/resp.json; echo
+          # Expect 200 with a non-empty array. 404 means schema cache lost the
+          # table — investigate, don't silently pass.
           [ "$code" = "200" ] || exit 1
+          grep -q '"id":1' /tmp/resp.json || { echo "row missing!"; exit 1; }
