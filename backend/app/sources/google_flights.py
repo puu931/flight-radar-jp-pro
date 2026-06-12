@@ -48,6 +48,12 @@ AIRLINE_NAME_TO_CODE = {
 # Days-from-today to sample. Spread across 90-day window.
 SAMPLE_OFFSETS = [7, 14, 21, 30, 45, 60, 75]
 
+# Even the cheapest direct one-way TPE↔JP fare clears NT$5,000 in practice.
+# Anything below this is the regex grabbing the wrong "新台幣" fragment
+# (savings amount, miles equivalent, etc.) — drop with a WARN so a future
+# Google layout change is loud, not silent.
+MIN_REALISTIC_TWD = 3000
+
 
 def _parse_zh_time(s: str) -> Optional[time]:
     """Parse '下午2:25', '上午11:00', '中午12:10', '晚上7:25', '清晨6:35', '凌晨12:45'."""
@@ -84,7 +90,10 @@ def _parse_aria_label(label: str, dep_date: date) -> Optional[dict]:
     """
     if "新台幣" not in label or "搭乘" not in label:
         return None
-    price_m = re.search(r"([\d,]+)\s*新台幣", label)
+    # Anchor on "新台幣起" — the main fare line always has the 起 suffix.
+    # Plain "新台幣" can appear in savings/miles fragments that produce
+    # absurdly low prices like NT$317.
+    price_m = re.search(r"([\d,]+)\s*新台幣\s*起", label)
     airline_m = re.search(r"搭乘([^的]+?)的", label)
     direct = "直達" in label
     dep_time_m = re.search(r"(?:^|\s|，)((?:凌晨|清晨|早上|上午|中午|下午|晚上)?\s*\d{1,2}:\d{2})\s*於", label)
@@ -215,6 +224,12 @@ class GoogleFlightsSource(FlightSource):
                     label = await cards.nth(i).get_attribute("aria-label") or ""
                     parsed = _parse_aria_label(label, dep_date)
                     if not parsed:
+                        continue
+                    if parsed["price"] < MIN_REALISTIC_TWD:
+                        log.warning(
+                            "Google Flights dropped suspicious price NT$%d on %s→%s: aria=%r",
+                            parsed["price"], origin, destination, label[:300],
+                        )
                         continue
                     code = AIRLINE_NAME_TO_CODE.get(parsed["airline_name"])
                     if not code:
