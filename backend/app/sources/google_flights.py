@@ -45,8 +45,10 @@ AIRLINE_NAME_TO_CODE = {
     "越捷航空": "VZ",
 }
 
-# Days-from-today to sample. Spread across 90-day window.
-SAMPLE_OFFSETS = [7, 14, 21, 30, 45, 60, 75]
+# Days-from-today to sample. 7 points evenly across the 180-day window
+# (scan time scales linearly with sample count; staying at 7 keeps each
+# full scan around ~14min, well under GH Actions' 25min timeout).
+SAMPLE_OFFSETS = [7, 30, 60, 90, 120, 150, 180]
 
 # Even the cheapest direct one-way TPE↔JP fare clears NT$5,000 in practice.
 # Anything below this is the regex grabbing the wrong "新台幣" fragment
