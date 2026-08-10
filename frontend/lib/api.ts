@@ -64,9 +64,21 @@ export type RoundTrip = {
 
 export type Settings = {
   airlines: string[];
-  routes: { origin: string; destination: string; max_price: number }[];
+  routes: {
+    origin: string;
+    destination: string;
+    max_price: number;
+    max_round_trip: number;
+    airlines: string[];
+    departure_start: string;
+    departure_end: string;
+    stay_days: number[];
+    alert_below: number;
+    top_n_alerts: number;
+  }[];
   filters: Record<string, unknown>;
   search: Record<string, unknown>;
+  trip: Record<string, unknown>;
   notification: Record<string, unknown>;
 };
 

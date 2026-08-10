@@ -58,6 +58,13 @@ class RouteIn(BaseModel):
     origin: str
     destination: str
     max_price: int
+    max_round_trip: int = 0
+    airlines: list[str] = []
+    departure_start: str = ""
+    departure_end: str = ""
+    stay_days: list[int] = []
+    alert_below: int = 0
+    top_n_alerts: int = 0
 
 
 class SettingsOut(BaseModel):
@@ -65,4 +72,5 @@ class SettingsOut(BaseModel):
     routes: list[RouteIn]
     filters: dict[str, Any]
     search: dict[str, Any]
+    trip: dict[str, Any]
     notification: dict[str, Any]

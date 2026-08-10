@@ -18,5 +18,6 @@ def read_settings() -> SettingsOut:
         routes=[RouteIn(**asdict(r)) for r in cfg.routes],
         filters=asdict(cfg.filters),
         search=asdict(cfg.search),
+        trip=asdict(cfg.trip),
         notification=asdict(cfg.notification),
     )

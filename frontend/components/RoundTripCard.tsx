@@ -22,7 +22,7 @@ export default function RoundTripCard({ rt, rank }: { rt: RoundTrip; rank: numbe
     <div className="bg-ink-800 border border-ink-600 rounded-lg p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-400 mb-1">第 {rank} 便宜 · 停留 {rt.stay_days} 天</div>
+          <div className="text-xs text-slate-400 mb-1">第 {rank} 便宜 · {rt.stay_days + 1} 天 {rt.stay_days} 夜</div>
           <div className="text-lg font-semibold">
             {rt.origin} ↔ {rt.destination}
           </div>

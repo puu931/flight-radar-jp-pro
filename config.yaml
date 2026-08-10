@@ -29,6 +29,16 @@ routes:
     destination: OKA
     max_price: 11000
     max_round_trip: 16500   # floor 14,216 + 15%
+  - origin: TPE
+    destination: CTS
+    max_price: 10000        # one-way fallback; this monitor uses alert_below
+    max_round_trip: 20000
+    airlines: [BR, JX]      # EVA Air + STARLUX only
+    departure_start: "2026-10-10"
+    departure_end: "2026-10-31"
+    stay_days: [5, 6, 7]     # nights/date gap = 6–8 calendar days
+    alert_below: 20000      # actual observed round-trip total, never an estimated fare
+    top_n_alerts: 10        # notify when a new combination enters the cheapest 10
 
 filters:
   direct_only: true

@@ -26,12 +26,12 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/joseph/Projects/flight-radar-jp-pro/.venv/bin/python</string>
-    <string>/Users/joseph/Projects/flight-radar-jp-pro/scripts/scan.py</string>
+    <string>/usr/bin/false</string>
+    <string>INSTALL_WITH_scripts/install_launchd.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/joseph/Projects/flight-radar-jp-pro</string>
+  <string>/tmp</string>
 
   <!-- Don't run on load (avoid surprise scrape when you re-install). -->
   <key>RunAtLoad</key>

@@ -45,11 +45,16 @@ class Aggregator:
         origin: str,
         destination: str,
         departure_date: date,
+        *,
+        exact_date: bool = False,
     ) -> list[FlightOffer]:
         offers: list[FlightOffer] = []
         for src in self.sources:
             try:
-                offers.extend(src.search(origin, destination, departure_date))
+                if exact_date and hasattr(src, "search_exact"):
+                    offers.extend(src.search_exact(origin, destination, departure_date))
+                else:
+                    offers.extend(src.search(origin, destination, departure_date))
             except Exception as e:  # pragma: no cover
                 log.exception("Source %s failed: %s", src.name, e)
         return offers

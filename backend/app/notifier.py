@@ -26,6 +26,13 @@ AIRLINE_NAME = {
 DISCORD_COLOR = 0x5E9BFF
 
 
+def required_delivery_succeeded(env, telegram_ok: bool, discord_ok: bool) -> bool:
+    """Discord is authoritative when configured; otherwise use Telegram."""
+    if env.discord_webhook_url:
+        return discord_ok
+    return telegram_ok
+
+
 def fingerprint(offer: FlightOffer) -> str:
     key = f"{offer.origin}|{offer.destination}|{offer.airline}|{offer.flight_number}|{offer.departure_at.isoformat()}|{int(offer.price_twd)}"
     return hashlib.sha1(key.encode()).hexdigest()
@@ -64,10 +71,31 @@ def _was_recently_alerted(fp: str, cooldown_hours: int) -> bool:
         row = db.execute(
             select(AlertLog)
             .where(AlertLog.fingerprint == fp)
+            .where(AlertLog.delivered.is_(True))
             .where(AlertLog.sent_at >= cutoff)
             .limit(1)
         ).scalar_one_or_none()
         return row is not None
+
+
+def _was_ever_alerted(fp: str) -> bool:
+    with session_scope() as db:
+        return db.execute(
+            select(AlertLog)
+            .where(AlertLog.fingerprint == fp)
+            .where(AlertLog.delivered.is_(True))
+            .limit(1)
+        ).scalar_one_or_none() is not None
+
+
+def round_trip_itinerary_fingerprint(rt) -> str:
+    """Stable identity for top-list membership; deliberately excludes fares."""
+    key = (
+        f"{rt.origin}|{rt.destination}|"
+        f"{rt.out_airline}{rt.out_flight_number}|{rt.out_departure_at.isoformat()}||"
+        f"{rt.return_airline}{rt.return_flight_number}|{rt.return_departure_at.isoformat()}"
+    )
+    return hashlib.sha1(key.encode()).hexdigest()
 
 
 def _record_alert(offer: FlightOffer, fp: str, message: str, delivered: bool) -> None:
@@ -145,7 +173,7 @@ def _format_round_trip_text(rt) -> str:
     out_dep = rt.out_departure_at.strftime("%m/%d %H:%M")
     ret_dep = rt.return_departure_at.strftime("%m/%d %H:%M")
     return (
-        f"✈️ {rt.origin}↔{rt.destination}  來回 NT$ {int(rt.total_price_twd):,}  ({rt.stay_days}天)\n"
+        f"✈️ {rt.origin}↔{rt.destination}  來回 NT$ {int(rt.total_price_twd):,}  ({rt.stay_days + 1}天{rt.stay_days}夜)\n"
         f"去 {rt.out_airline}{rt.out_flight_number} {out_dep}  NT$ {int(rt.out_price_twd):,}\n"
         f"回 {rt.return_airline}{rt.return_flight_number} {ret_dep}  NT$ {int(rt.return_price_twd):,}"
     )
@@ -158,7 +186,7 @@ def _send_telegram_round_trip(rt) -> bool:
     out_dep = rt.out_departure_at.strftime("%Y-%m-%d %H:%M")
     ret_dep = rt.return_departure_at.strftime("%Y-%m-%d %H:%M")
     text = (
-        f"✈️ <b>{rt.origin} ↔ {rt.destination}</b>  來回 <b>NT$ {int(rt.total_price_twd):,}</b>  ({rt.stay_days}天)\n"
+        f"✈️ <b>{rt.origin} ↔ {rt.destination}</b>  來回 <b>NT$ {int(rt.total_price_twd):,}</b>  ({rt.stay_days + 1}天{rt.stay_days}夜)\n"
         f"去 {rt.out_airline}{rt.out_flight_number} {out_dep}  NT$ {int(rt.out_price_twd):,}\n"
         f"回 {rt.return_airline}{rt.return_flight_number} {ret_dep}  NT$ {int(rt.return_price_twd):,}"
     )
@@ -193,7 +221,7 @@ def _send_discord_round_trip(rt) -> bool:
     embed: dict = {
         "title": f"✈️ {rt.origin} ↔ {rt.destination}  來回 NT$ {int(rt.total_price_twd):,}",
         "description": (
-            f"**停留 {rt.stay_days} 天**\n"
+            f"**{rt.stay_days + 1} 天 {rt.stay_days} 夜**\n"
             f"🛫 **去** {out_name} ({rt.out_airline}) {rt.out_flight_number}\n"
             f"  {out_dep}  ·  NT$ {int(rt.out_price_twd):,}\n"
             f"🛬 **回** {ret_name} ({rt.return_airline}) {rt.return_flight_number}\n"
@@ -215,19 +243,26 @@ def _send_discord_round_trip(rt) -> bool:
         return False
 
 
-def send_round_trip_alert(rt) -> bool:
+def send_round_trip_alert(rt, *, only_if_new: bool = False) -> bool:
     """Send a round-trip combo alert to all configured channels with dedupe."""
     cfg = get_config()
     env = get_env()
-    fp = "rt:" + rt.fingerprint
-    if cfg.notification.dedupe and _was_recently_alerted(fp, cfg.notification.cooldown_hours):
+    fp = (
+        "rt-itinerary:" + round_trip_itinerary_fingerprint(rt)
+        if only_if_new else "rt:" + rt.fingerprint
+    )
+    already_alerted = (
+        _was_ever_alerted(fp) if only_if_new
+        else _was_recently_alerted(fp, cfg.notification.cooldown_hours)
+    )
+    if cfg.notification.dedupe and already_alerted:
         log.debug("Skipping duplicate round-trip alert: %s", fp)
         return False
     text = _format_round_trip_text(rt)
     has_any_channel = bool(env.bot_token and env.chat_id) or bool(env.discord_webhook_url)
     if not has_any_channel:
         log.info("[dry-run round-trip] %s", text.replace("\n", " | "))
-        # Record fake AlertLog so dedupe still works in subsequent runs.
+        # Keep an audit row, but delivered=False means a later real send retries.
         with session_scope() as db:
             db.add(AlertLog(
                 fingerprint=fp,
@@ -239,7 +274,7 @@ def send_round_trip_alert(rt) -> bool:
         return False
     tg_ok = _send_telegram_round_trip(rt)
     dc_ok = _send_discord_round_trip(rt)
-    delivered = tg_ok or dc_ok
+    delivered = required_delivery_succeeded(env, tg_ok, dc_ok)
     with session_scope() as db:
         db.add(AlertLog(
             fingerprint=fp,
@@ -248,6 +283,16 @@ def send_round_trip_alert(rt) -> bool:
             departure_at=rt.out_departure_at, price_twd=rt.total_price_twd,
             delivered=delivered, message=text,
         ))
+        # A successfully delivered deal also counts as having seen this
+        # itinerary for future "new top-N" membership, independent of price.
+        if delivered and not only_if_new:
+            db.add(AlertLog(
+                fingerprint="rt-itinerary:" + round_trip_itinerary_fingerprint(rt),
+                origin=rt.origin, destination=rt.destination,
+                airline=rt.out_airline, flight_number=rt.out_flight_number,
+                departure_at=rt.out_departure_at, price_twd=rt.total_price_twd,
+                delivered=True, message=text,
+            ))
     if tg_ok and dc_ok:
         log.info("Round-trip alert sent to telegram + discord: %s", fp)
     elif tg_ok:
@@ -276,7 +321,7 @@ def send_alert(offer: FlightOffer) -> bool:
 
     tg_ok = _send_telegram(offer)
     dc_ok = _send_discord(offer)
-    delivered = tg_ok or dc_ok
+    delivered = required_delivery_succeeded(env, tg_ok, dc_ok)
 
     if tg_ok and dc_ok:
         log.info("Alert sent to telegram + discord: %s", fp)

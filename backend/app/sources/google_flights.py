@@ -131,8 +131,27 @@ class GoogleFlightsSource(FlightSource):
         destination: str,
         departure_date: date,
     ) -> list[FlightOffer]:
+        return self._search(origin, destination, departure_date, exact_date=False)
+
+    def search_exact(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: date,
+    ) -> list[FlightOffer]:
+        """Search an explicitly configured date, bypassing broad-scan sampling."""
+        return self._search(origin, destination, departure_date, exact_date=True)
+
+    def _search(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: date,
+        *,
+        exact_date: bool,
+    ) -> list[FlightOffer]:
         offset = (departure_date - date.today()).days
-        if offset < 0 or offset not in SAMPLE_OFFSETS:
+        if offset < 0 or (not exact_date and offset not in SAMPLE_OFFSETS):
             return []
         key = (origin, destination, departure_date.isoformat())
         if key in self._cache:

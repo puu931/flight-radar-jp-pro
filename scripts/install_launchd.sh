@@ -21,6 +21,12 @@ mkdir -p "$HOME/Library/LaunchAgents"
 launchctl unload "$PLIST_DST" 2>/dev/null || true
 
 cp "$PLIST_SRC" "$PLIST_DST"
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $REPO_DIR/.venv/bin/python" "$PLIST_DST"
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:1 $REPO_DIR/scripts/scan.py" "$PLIST_DST"
+/usr/libexec/PlistBuddy -c "Set :WorkingDirectory $REPO_DIR" "$PLIST_DST"
+/usr/libexec/PlistBuddy -c "Set :StandardOutPath $REPO_DIR/logs/scan.log" "$PLIST_DST"
+/usr/libexec/PlistBuddy -c "Set :StandardErrorPath $REPO_DIR/logs/scan.err.log" "$PLIST_DST"
+/usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:HOME $HOME" "$PLIST_DST"
 launchctl load "$PLIST_DST"
 
 echo "✅ Installed: $PLIST_DST"

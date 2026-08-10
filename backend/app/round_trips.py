@@ -28,21 +28,29 @@ def pair_route(
     out_flights: list[Flight],
     in_flights: list[Flight],
     stay_days: list[int],
-    max_total: float,
+    max_total: float | None,
 ) -> list[dict]:
-    """Pair outbound + return flights by allowed stay length, keep ones under max_total."""
+    """Pair outbound + return flights by allowed stay length, keep unique results."""
     in_by_date: dict = defaultdict(list)
     for f in in_flights:
         in_by_date[f.departure_at.date()].append(f)
     combos: list[dict] = []
+    # Historical scans can contain the same fare more than once. RoundTrip uses
+    # this fingerprint as a unique key, so discard duplicate combinations before
+    # they reach the database (and before history sample counts are recorded).
+    seen_fingerprints: set[str] = set()
     for out in out_flights:
         out_date = out.departure_at.date()
         for stay in stay_days:
             ret_date = out_date + timedelta(days=stay)
             for ret in in_by_date.get(ret_date, []):
                 total = float(out.price_twd) + float(ret.price_twd)
-                if total > max_total:
+                if max_total is not None and total > max_total:
                     continue
+                persisted_fingerprint = _round_trip_fp(out, ret)
+                if persisted_fingerprint in seen_fingerprints:
+                    continue
+                seen_fingerprints.add(persisted_fingerprint)
                 combos.append({
                     "out": out,
                     "ret": ret,
@@ -64,6 +72,14 @@ def build_round_trips(cfg: AppConfig) -> list[RoundTrip]:
         db.execute(delete(RoundTrip))
 
         for route in cfg.routes:
+            departure_start = (
+                datetime.fromisoformat(route.departure_start).date()
+                if route.departure_start else None
+            )
+            departure_end = (
+                datetime.fromisoformat(route.departure_end).date()
+                if route.departure_end else None
+            )
             out_flights = list(db.execute(
                 select(Flight)
                 .where(Flight.origin == route.origin)
@@ -74,15 +90,28 @@ def build_round_trips(cfg: AppConfig) -> list[RoundTrip]:
                 .where(Flight.origin == route.destination)
                 .where(Flight.destination == route.origin)
             ).scalars())
+            if route.airlines:
+                out_flights = [f for f in out_flights if f.airline in route.airlines]
+                in_flights = [f for f in in_flights if f.airline in route.airlines]
+            if departure_start:
+                out_flights = [f for f in out_flights if f.departure_at.date() >= departure_start]
+            if departure_end:
+                out_flights = [f for f in out_flights if f.departure_at.date() <= departure_end]
             if not out_flights or not in_flights:
                 log.info("RoundTrip %s↔%s: no data on one leg (out=%d, in=%d)",
                          route.origin, route.destination, len(out_flights), len(in_flights))
                 continue
-            max_total = float(route.max_round_trip or route.max_price * 2)
-            combos = pair_route(out_flights, in_flights, cfg.trip.stay_days, max_total)
+            # A dated fare watch needs the actual top-N even when it is above the
+            # deal threshold, so it deliberately has no pairing price ceiling.
+            max_total = None if (route.alert_below or route.top_n_alerts) else float(
+                route.max_round_trip or route.max_price * 2
+            )
+            stay_days = route.stay_days or cfg.trip.stay_days
+            combos = pair_route(out_flights, in_flights, stay_days, max_total)
             log.info("RoundTrip %s↔%s: out=%d in=%d → %d combos under %s",
                      route.origin, route.destination,
-                     len(out_flights), len(in_flights), len(combos), int(max_total))
+                     len(out_flights), len(in_flights), len(combos),
+                     "none" if max_total is None else int(max_total))
 
             # Append a history row so trends can chart min round-trip price per scan.
             if combos:
@@ -128,4 +157,58 @@ def top_cheapest(limit: int = 5) -> list[RoundTrip]:
         # detach so callers don't see DetachedInstance errors
         for r in rows:
             db.expunge(r)
+        return rows
+
+
+def top_cheapest_for_routes(routes: list[tuple[str, str]], limit: int) -> list[RoundTrip]:
+    """Global top-N across a selected set of legacy routes."""
+    if not routes or limit <= 0:
+        return []
+    allowed = set(routes)
+    with session_scope() as db:
+        candidates = list(db.execute(
+            select(RoundTrip).order_by(RoundTrip.total_price_twd.asc())
+        ).scalars())
+        rows = select_top_for_routes(candidates, allowed, limit)
+        for row in rows:
+            db.expunge(row)
+        return rows
+
+
+def select_top_for_routes(
+    candidates: list[RoundTrip],
+    allowed: set[tuple[str, str]],
+    limit: int,
+) -> list[RoundTrip]:
+    """Select one global top-N from already price-ordered candidates."""
+    return [r for r in candidates if (r.origin, r.destination) in allowed][:limit]
+
+
+def cheapest_for_route(origin: str, destination: str, limit: int) -> list[RoundTrip]:
+    """Return detached cheapest combinations for one configured route."""
+    with session_scope() as db:
+        rows = list(db.execute(
+            select(RoundTrip)
+            .where(RoundTrip.origin == origin)
+            .where(RoundTrip.destination == destination)
+            .order_by(RoundTrip.total_price_twd.asc())
+            .limit(limit)
+        ).scalars())
+        for row in rows:
+            db.expunge(row)
+        return rows
+
+
+def below_price_for_route(origin: str, destination: str, price: float) -> list[RoundTrip]:
+    """Return detached combinations below a route's deal threshold."""
+    with session_scope() as db:
+        rows = list(db.execute(
+            select(RoundTrip)
+            .where(RoundTrip.origin == origin)
+            .where(RoundTrip.destination == destination)
+            .where(RoundTrip.total_price_twd < price)
+            .order_by(RoundTrip.total_price_twd.asc())
+        ).scalars())
+        for row in rows:
+            db.expunge(row)
         return rows

@@ -10,11 +10,20 @@ from .db import session_scope
 from .filters import passes_filters
 from .models import Flight, PriceHistory
 from .notifier import send_alert, send_round_trip_alert
-from .round_trips import build_round_trips, top_cheapest
+from .round_trips import (
+    below_price_for_route,
+    build_round_trips,
+    cheapest_for_route,
+    top_cheapest_for_routes,
+)
 from .sources.aggregator import Aggregator
 from .sources.base import FlightOffer
 
 log = logging.getLogger(__name__)
+
+
+def notifications_are_safe(requested: bool, sources: list[str]) -> bool:
+    return requested and "mock" not in sources
 
 
 def _persist_offers(offers: list[FlightOffer]) -> None:
@@ -73,13 +82,25 @@ def _scan_route_direction(
     origin: str,
     destination: str,
     days: int,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    airlines: list[str] | None = None,
+    exact_dates: bool = False,
 ) -> list[FlightOffer]:
     today = date.today()
     found: list[FlightOffer] = []
-    for offset in range(1, days + 1):
-        dep_date = today + timedelta(days=offset)
-        offers = aggregator.search(origin, destination, dep_date)
-        kept = [o for o in offers if passes_filters(o, cfg)]
+    first = start_date or today + timedelta(days=1)
+    last = end_date or today + timedelta(days=days)
+    if last < first:
+        return found
+    for offset in range((last - first).days + 1):
+        dep_date = first + timedelta(days=offset)
+        if dep_date <= today:
+            continue
+        offers = aggregator.search(
+            origin, destination, dep_date, exact_date=exact_dates,
+        )
+        kept = [o for o in offers if passes_filters(o, cfg, airlines)]
         found.extend(kept)
     return found
 
@@ -87,6 +108,10 @@ def _scan_route_direction(
 def scan_all(notify: bool = True) -> dict:
     cfg = get_config()
     aggregator = Aggregator()
+    # Mock fares are synthetic and must never reach a real notification channel.
+    notifications_enabled = notifications_are_safe(
+        notify, [source.name for source in aggregator.sources],
+    )
     summary: dict = {
         "routes": [],
         "alerts_sent": 0,
@@ -99,8 +124,13 @@ def scan_all(notify: bool = True) -> dict:
     is_round_trip = cfg.trip.type == "round_trip"
 
     for route in cfg.routes:
+        departure_start = date.fromisoformat(route.departure_start) if route.departure_start else None
+        departure_end = date.fromisoformat(route.departure_end) if route.departure_end else None
+        stay_days = route.stay_days or cfg.trip.stay_days
         out_offers = _scan_route_direction(
             aggregator, cfg, route.origin, route.destination, cfg.search.future_days,
+            departure_start, departure_end, route.airlines,
+            bool(departure_start or departure_end),
         )
         all_offers.extend(out_offers)
 
@@ -108,6 +138,10 @@ def scan_all(notify: bool = True) -> dict:
         if is_round_trip:
             in_offers = _scan_route_direction(
                 aggregator, cfg, route.destination, route.origin, cfg.search.future_days,
+                (departure_start + timedelta(days=min(stay_days))) if departure_start else None,
+                (departure_end + timedelta(days=max(stay_days))) if departure_end else None,
+                route.airlines,
+                bool(departure_start or departure_end),
             )
             all_offers.extend(in_offers)
 
@@ -122,7 +156,7 @@ def scan_all(notify: bool = True) -> dict:
         if not is_round_trip:
             single_alerts = [o for o in out_offers if o.price_twd <= route.max_price]
             single_alerts = _cheapest_per_day_airline(single_alerts)
-            if notify:
+            if notifications_enabled:
                 for o in single_alerts:
                     if send_alert(o):
                         sent += 1
@@ -140,13 +174,35 @@ def scan_all(notify: bool = True) -> dict:
     # Round-trip pairing + top-N alerts
     if is_round_trip:
         build_round_trips(cfg)
-        top = top_cheapest(cfg.trip.top_n_alerts)
-        summary["round_trips"] = len(top)
         sent_rt = 0
-        if notify:
-            for rt in top:
+        if notifications_enabled:
+            legacy_routes: list[tuple[str, str]] = []
+            for route in cfg.routes:
+                if route.alert_below or route.top_n_alerts:
+                    cheap = below_price_for_route(
+                        route.origin, route.destination, route.alert_below,
+                    ) if route.alert_below else []
+                    top = cheapest_for_route(
+                        route.origin, route.destination, route.top_n_alerts,
+                    ) if route.top_n_alerts else []
+                    cheap_fps = {rt.fingerprint for rt in cheap}
+                    for rt in cheap:
+                        if send_round_trip_alert(rt):
+                            sent_rt += 1
+                    for rt in top:
+                        if rt.fingerprint not in cheap_fps and send_round_trip_alert(rt, only_if_new=True):
+                            sent_rt += 1
+                else:
+                    legacy_routes.append((route.origin, route.destination))
+            # Preserve the original behavior: one global top-N shared by all
+            # routes that do not opt into route-specific monitoring.
+            for rt in top_cheapest_for_routes(legacy_routes, cfg.trip.top_n_alerts):
                 if send_round_trip_alert(rt):
                     sent_rt += 1
+        summary["round_trips"] = sum(
+            len(cheapest_for_route(r.origin, r.destination, r.top_n_alerts or cfg.trip.top_n_alerts))
+            for r in cfg.routes
+        )
         summary["round_trip_alerts_sent"] = sent_rt
 
     log.info("Scan complete: %s", summary)

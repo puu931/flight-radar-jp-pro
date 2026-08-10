@@ -14,10 +14,15 @@ def _parse_hhmm(value: str) -> time:
     return time(int(h), int(m))
 
 
-def passes_filters(offer: FlightOffer, cfg: AppConfig) -> bool:
+def passes_filters(
+    offer: FlightOffer,
+    cfg: AppConfig,
+    airlines: list[str] | None = None,
+) -> bool:
     f = cfg.filters
     # Airline whitelist
-    if cfg.airlines and offer.airline not in cfg.airlines:
+    airline_whitelist = airlines if airlines else cfg.airlines
+    if airline_whitelist and offer.airline not in airline_whitelist:
         return False
     # Direct only
     if f.direct_only and offer.stops > 0:

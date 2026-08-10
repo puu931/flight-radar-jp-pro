@@ -14,6 +14,7 @@ _BASE_PRICE = {
     "KIX": 7200,
     "FUK": 6400,
     "OKA": 5500,
+    "CTS": 9000,
 }
 
 _AIRLINES = [

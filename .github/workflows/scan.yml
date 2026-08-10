@@ -11,7 +11,8 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Exact-date CTS monitoring adds dozens of browser-backed searches per run.
+    timeout-minutes: 40
     permissions:
       contents: write
     steps:

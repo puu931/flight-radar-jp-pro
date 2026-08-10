@@ -20,6 +20,12 @@ class Route:
     destination: str
     max_price: int
     max_round_trip: int = 0  # 0 = use 2 * max_price as fallback
+    airlines: list[str] = field(default_factory=list)
+    departure_start: str = ""
+    departure_end: str = ""
+    stay_days: list[int] = field(default_factory=list)
+    alert_below: int = 0
+    top_n_alerts: int = 0
 
 
 @dataclass

@@ -8,7 +8,7 @@ Real-time alerts, price trends, low-fare calendar heatmap, multi-source aggregat
 ## 🚀 Features
 
 ### ✈️ Flight search
-- Taiwan (TPE / TSA / KHH) → Japan (NRT / HND / KIX / FUK / OKA)
+- Taiwan (TPE / TSA / KHH) → Japan (NRT / HND / KIX / FUK / OKA / CTS)
 - Scans next 90 days
 - Displays in TWD
 - Multi-source aggregation (Amadeus / Travelpayouts / Skyscanner / Kiwi / fallback crawler)
@@ -74,6 +74,16 @@ Database
 ## ⚙️ Configuration
 
 See `config.yaml` for routes, airlines, filters, and search window.
+
+Routes may override the global airline and stay-length filters. A route can
+also set an exact `departure_start`/`departure_end`, an `alert_below`
+round-trip threshold, and route-specific `top_n_alerts`. Dated routes scan
+every configured date (including Google Flights); broad routes retain the
+normal sampling strategy.
+
+Live notifications require real data sources such as
+`FLIGHT_SOURCES=travelpayouts,google_flights`. The `mock` source is synthetic;
+if it is present in `FLIGHT_SOURCES`, Telegram and Discord delivery is disabled.
 
 ### Environment variables (`.env`)
 
