@@ -1,0 +1,31 @@
+name: Discord Webhook Test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test-webhook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send test message
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "$DISCORD_WEBHOOK_URL" ] || {
+            echo "DISCORD_WEBHOOK_URL secret is missing or empty"
+            exit 1
+          }
+
+          code=$(curl --silent --show-error --output /tmp/discord-response.txt \
+            --write-out "%{http_code}" --max-time 30 \
+            -H "Content-Type: application/json" \
+            --data '{"content":"✅ Flight Radar Discord webhook test succeeded (GitHub Actions)."}' \
+            "$DISCORD_WEBHOOK_URL")
+
+          echo "Discord HTTP status: $code"
+          [ "$code" = "204" ] || {
+            head -c 500 /tmp/discord-response.txt
+            exit 1
+          }
