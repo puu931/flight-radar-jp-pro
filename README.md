@@ -82,8 +82,12 @@ every configured date (including Google Flights); broad routes retain the
 normal sampling strategy.
 
 Live notifications require real data sources such as
-`FLIGHT_SOURCES=travelpayouts,google_flights`. The `mock` source is synthetic;
-if it is present in `FLIGHT_SOURCES`, Telegram and Discord delivery is disabled.
+`FLIGHT_SOURCES=travelpayouts,google_flights`. GitHub Actions validates its
+runtime configuration before installing dependencies and refuses to scan when
+`DATABASE_URL`, `DISCORD_WEBHOOK_URL`, or `FLIGHT_SOURCES` is missing.
+`TRAVELPAYOUTS_TOKEN` is required when the Travelpayouts source is enabled. The
+scheduled scan also rejects the synthetic `mock` source so a green workflow
+always represents a live-data scan.
 
 ### Environment variables (`.env`)
 
@@ -143,8 +147,29 @@ channels have credentials configured.
 
 ## ⏰ Scheduler (GitHub Actions)
 
-Runs automatically at 09:00 / 15:00 / 23:00 JST.
-See `.github/workflows/scan.yml`.
+The flight scan runs automatically at 09:00 / 15:00 / 23:00 JST. Supabase is
+queried through PostgREST twice per day so its free-tier project remains active.
+These checks are defined in `.github/workflows/scan.yml` and
+`.github/workflows/keepalive.yml`.
+
+GitHub can disable scheduled workflows in a public repository after 60 days
+without repository activity, even when previous scheduled runs succeeded. The
+`Repository Activity Heartbeat` workflow updates
+`.github/repository-activity.txt` on the first day of each month. It may also be
+run manually; a second run on the same UTC date exits without another commit.
+
+### Health checks
+
+- `Supabase Keep-Alive` must return HTTP 200 and the expected `keepalive_ping`
+  row. A green run confirms a real database query, not only an HTTP health page.
+- `Flight Scan` must pass the runtime configuration check and finish before its
+  40-minute timeout. A successful scan can legitimately send zero alerts when
+  every matching itinerary is already deduplicated or outside the thresholds.
+- `Discord Webhook Test` is manual because it posts a real test message. Run it
+  after rotating the webhook or when scans find qualifying fares but Discord
+  receives nothing.
+- `Repository Activity Heartbeat` should create at most one maintenance commit
+  per UTC date and prevents the 60-day scheduled-workflow inactivity cutoff.
 
 ---
 

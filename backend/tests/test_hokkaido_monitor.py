@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import os
 import unittest
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
+
+# Force every direct unittest invocation onto an isolated database before any
+# app module imports create the SQLAlchemy engine. Never inherit DATABASE_URL.
+os.environ["DATABASE_URL"] = f"sqlite:////tmp/flight-radar-tests-{os.getpid()}.db"
+os.environ["FLIGHT_SOURCES"] = "mock"
 
 from app.config import AppConfig, CONFIG_PATH
-from app.models import Flight
+from app.db import init_db, session_scope
+from app.models import Flight, RoundTrip
 from app.notifier import required_delivery_succeeded, round_trip_itinerary_fingerprint
-from app.round_trips import pair_route, select_top_for_routes
-from app.scanner import notifications_are_safe
+from app.round_trips import build_round_trips, pair_route, select_top_for_routes
+from app.scanner import ScanHealthError, notifications_are_safe, scan_all
 from app.sources.aggregator import Aggregator
+from app.sources.base import FlightOffer
+from sqlalchemy import delete
 
 
 def flight(direction: str, departure: date, price: float, airline: str = "BR") -> Flight:
@@ -49,6 +60,127 @@ class ExactSource:
 
 
 class HokkaidoMonitorTests(unittest.TestCase):
+    def test_build_round_trips_ignores_stale_flights(self) -> None:
+        init_db()
+        scan_started_at = datetime.utcnow()
+        departure = date(2026, 10, 15)
+        stale_out = flight("out", departure, 1_000, "JX")
+        stale_in = flight("in", departure + timedelta(days=5), 1_000, "BR")
+        fresh_out = flight("out", departure, 12_000, "JX")
+        fresh_in = flight("in", departure + timedelta(days=5), 8_000, "BR")
+        stale_out.fetched_at = stale_in.fetched_at = scan_started_at - timedelta(seconds=1)
+        fresh_out.fetched_at = fresh_in.fetched_at = scan_started_at
+        with session_scope() as db:
+            db.execute(delete(RoundTrip))
+            db.execute(delete(Flight))
+            db.add_all([stale_out, stale_in, fresh_out, fresh_in])
+
+        rows = build_round_trips(AppConfig.load(CONFIG_PATH), fetched_at=scan_started_at)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].origin, rows[0].destination), ("TPE", "CTS"))
+        with session_scope() as db:
+            cts_rows = list(db.query(RoundTrip).filter_by(
+                origin="TPE", destination="CTS",
+            ))
+            self.assertEqual(len(cts_rows), 1)
+            self.assertEqual(cts_rows[0].total_price_twd, 20_000)
+
+    def test_required_route_missing_leg_fails_before_notifier(self) -> None:
+        class LiveSource:
+            name = "live-test"
+
+        class PartialAggregator:
+            sources = [LiveSource()]
+
+            def search(self, origin, destination, departure_date, *, exact_date=False):
+                if {origin, destination} != {"TPE", "NRT"}:
+                    return []
+                departure_at = datetime.combine(departure_date, datetime.min.time()).replace(hour=10)
+                return [FlightOffer(
+                    source="test", airline="BR", flight_number="BR123",
+                    origin=origin, destination=destination,
+                    departure_at=departure_at,
+                    arrival_at=departure_at + timedelta(hours=4),
+                    duration_minutes=240, stops=0, price_twd=8_000,
+                    currency="TWD", baggage_included=False,
+                    fare_class="economy", deep_link="",
+                )]
+
+        with (
+            patch("app.scanner.Aggregator", return_value=PartialAggregator()),
+            patch("app.scanner._persist_offers"),
+            patch("app.scanner._record_price_history"),
+            patch("app.scanner.send_round_trip_alert") as notifier,
+        ):
+            with self.assertRaisesRegex(ScanHealthError, "required route TPE-CTS"):
+                scan_all(notify=True)
+        notifier.assert_not_called()
+
+    def test_empty_scan_fails_before_any_notifier(self) -> None:
+        class LiveSource:
+            name = "live-test"
+
+        class EmptyAggregator:
+            sources = [LiveSource()]
+
+            def search(self, origin, destination, departure_date, *, exact_date=False):
+                return []
+
+        with (
+            patch("app.scanner.Aggregator", return_value=EmptyAggregator()),
+            patch("app.scanner._persist_offers"),
+            patch("app.scanner._record_price_history"),
+            patch("app.scanner.send_alert") as one_way_notifier,
+            patch("app.scanner.send_round_trip_alert") as round_trip_notifier,
+        ):
+            with self.assertRaisesRegex(ScanHealthError, "no flight offers"):
+                scan_all(notify=True)
+        one_way_notifier.assert_not_called()
+        round_trip_notifier.assert_not_called()
+
+    def test_required_route_without_compatible_combo_fails_before_notifier(self) -> None:
+        cfg = AppConfig.load(CONFIG_PATH)
+        cts = next(r for r in cfg.routes if (r.origin, r.destination) == ("TPE", "CTS"))
+        departure = date(2026, 10, 15)
+        out_offer = FlightOffer(
+            source="test", airline="JX", flight_number="JX850",
+            origin="TPE", destination="CTS",
+            departure_at=datetime.combine(departure, datetime.min.time()).replace(hour=10),
+            arrival_at=datetime.combine(departure, datetime.min.time()).replace(hour=14),
+            duration_minutes=240, stops=0, price_twd=10_000,
+        )
+        # Both legs exist, but a two-day gap cannot match CTS stay_days [5, 6, 7].
+        in_offer = FlightOffer(
+            source="test", airline="BR", flight_number="BR115",
+            origin="CTS", destination="TPE",
+            departure_at=datetime.combine(departure + timedelta(days=2), datetime.min.time()).replace(hour=10),
+            arrival_at=datetime.combine(departure + timedelta(days=2), datetime.min.time()).replace(hour=14),
+            duration_minutes=240, stops=0, price_twd=10_000,
+        )
+
+        def scan_direction(_aggregator, _cfg, origin, destination, *_args, **_kwargs):
+            if (origin, destination) == (cts.origin, cts.destination):
+                return [out_offer]
+            if (origin, destination) == (cts.destination, cts.origin):
+                return [in_offer]
+            return []
+
+        # A legacy route having a valid combo must not mask CTS having none.
+        legacy_combo = SimpleNamespace(origin="TPE", destination="NRT")
+        with (
+            patch("app.scanner._scan_route_direction", side_effect=scan_direction),
+            patch("app.scanner._persist_offers"),
+            patch("app.scanner._record_price_history"),
+            patch("app.scanner.build_round_trips", return_value=[legacy_combo]),
+            patch("app.scanner.send_round_trip_alert") as notifier,
+        ):
+            with self.assertRaisesRegex(
+                ScanHealthError, "required route TPE-CTS produced no round-trip",
+            ):
+                scan_all(notify=True)
+        notifier.assert_not_called()
+
     def test_config_has_requested_monitor(self) -> None:
         cfg = AppConfig.load(CONFIG_PATH)
         route = next(r for r in cfg.routes if (r.origin, r.destination) == ("TPE", "CTS"))

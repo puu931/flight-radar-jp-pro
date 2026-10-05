@@ -60,8 +60,8 @@ def pair_route(
     return combos
 
 
-def build_round_trips(cfg: AppConfig) -> list[RoundTrip]:
-    """Generate round-trip records from flights currently in the DB.
+def build_round_trips(cfg: AppConfig, *, fetched_at: datetime) -> list[RoundTrip]:
+    """Generate round trips from rows fetched by the current scan only.
 
     Wipes existing round_trips table before writing fresh combinations.
     Returns the persisted RoundTrip rows (already committed).
@@ -84,11 +84,13 @@ def build_round_trips(cfg: AppConfig) -> list[RoundTrip]:
                 select(Flight)
                 .where(Flight.origin == route.origin)
                 .where(Flight.destination == route.destination)
+                .where(Flight.fetched_at == fetched_at)
             ).scalars())
             in_flights = list(db.execute(
                 select(Flight)
                 .where(Flight.origin == route.destination)
                 .where(Flight.destination == route.origin)
+                .where(Flight.fetched_at == fetched_at)
             ).scalars())
             if route.airlines:
                 out_flights = [f for f in out_flights if f.airline in route.airlines]
@@ -144,6 +146,11 @@ def build_round_trips(cfg: AppConfig) -> list[RoundTrip]:
                 )
                 db.add(rt)
                 out_records.append(rt)
+        # Keep the returned records readable after session_scope commits so the
+        # caller can validate per-route coverage before sending notifications.
+        db.flush()
+        for record in out_records:
+            db.expunge(record)
     return out_records
 
 

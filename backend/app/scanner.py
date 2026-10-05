@@ -22,11 +22,15 @@ from .sources.base import FlightOffer
 log = logging.getLogger(__name__)
 
 
+class ScanHealthError(RuntimeError):
+    """The scan ran, but did not produce data safe enough to notify from."""
+
+
 def notifications_are_safe(requested: bool, sources: list[str]) -> bool:
     return requested and "mock" not in sources
 
 
-def _persist_offers(offers: list[FlightOffer]) -> None:
+def _persist_offers(offers: list[FlightOffer], *, fetched_at: datetime) -> None:
     if not offers:
         return
     with session_scope() as db:
@@ -55,6 +59,7 @@ def _persist_offers(offers: list[FlightOffer]) -> None:
                 baggage_included=o.baggage_included,
                 fare_class=o.fare_class,
                 deep_link=o.deep_link,
+                fetched_at=fetched_at,
             ))
 
 
@@ -106,6 +111,7 @@ def _scan_route_direction(
 
 
 def scan_all(notify: bool = True) -> dict:
+    scan_started_at = datetime.utcnow()
     cfg = get_config()
     aggregator = Aggregator()
     # Mock fares are synthetic and must never reach a real notification channel.
@@ -121,6 +127,7 @@ def scan_all(notify: bool = True) -> dict:
     }
 
     all_offers: list[FlightOffer] = []
+    pending_single_alerts: list[FlightOffer] = []
     is_round_trip = cfg.trip.type == "round_trip"
 
     for route in cfg.routes:
@@ -147,7 +154,7 @@ def scan_all(notify: bool = True) -> dict:
 
         # Commit per route so a kill/timeout mid-scan doesn't lose hours of work.
         route_offers = out_offers + in_offers
-        _persist_offers(route_offers)
+        _persist_offers(route_offers, fetched_at=scan_started_at)
         _record_price_history(route_offers)
 
         # One-way alerts only fire when not in round-trip mode (avoids duplicate noise).
@@ -156,10 +163,7 @@ def scan_all(notify: bool = True) -> dict:
         if not is_round_trip:
             single_alerts = [o for o in out_offers if o.price_twd <= route.max_price]
             single_alerts = _cheapest_per_day_airline(single_alerts)
-            if notifications_enabled:
-                for o in single_alerts:
-                    if send_alert(o):
-                        sent += 1
+            pending_single_alerts.extend(single_alerts)
 
         summary["routes"].append({
             "route": f"{route.origin}-{route.destination}",
@@ -170,10 +174,43 @@ def scan_all(notify: bool = True) -> dict:
         summary["alerts_sent"] += sent
 
     summary["total_offers"] = len(all_offers)
+    if summary["total_offers"] <= 0:
+        raise ScanHealthError("scan returned no flight offers")
+
+    for route, route_summary in zip(cfg.routes, summary["routes"]):
+        required = bool(
+            route.departure_start or route.departure_end
+            or route.alert_below or route.top_n_alerts
+        )
+        if required and (
+            route_summary["out_offers"] <= 0
+            or (is_round_trip and route_summary["in_offers"] <= 0)
+        ):
+            raise ScanHealthError(
+                f"required route {route.origin}-{route.destination} "
+                "returned no data on one or more legs"
+            )
 
     # Round-trip pairing + top-N alerts
     if is_round_trip:
-        build_round_trips(cfg)
+        round_trips = build_round_trips(cfg, fetched_at=scan_started_at)
+        summary["round_trips"] = len(round_trips)
+        if summary["round_trips"] <= 0:
+            raise ScanHealthError("round-trip scan produced no combinations")
+        routes_with_combos = {
+            (round_trip.origin, round_trip.destination)
+            for round_trip in round_trips
+        }
+        for route in cfg.routes:
+            required = bool(
+                route.departure_start or route.departure_end
+                or route.alert_below or route.top_n_alerts
+            )
+            if required and (route.origin, route.destination) not in routes_with_combos:
+                raise ScanHealthError(
+                    f"required route {route.origin}-{route.destination} "
+                    "produced no round-trip combinations"
+                )
         sent_rt = 0
         if notifications_enabled:
             legacy_routes: list[tuple[str, str]] = []
@@ -199,11 +236,11 @@ def scan_all(notify: bool = True) -> dict:
             for rt in top_cheapest_for_routes(legacy_routes, cfg.trip.top_n_alerts):
                 if send_round_trip_alert(rt):
                     sent_rt += 1
-        summary["round_trips"] = sum(
-            len(cheapest_for_route(r.origin, r.destination, r.top_n_alerts or cfg.trip.top_n_alerts))
-            for r in cfg.routes
-        )
         summary["round_trip_alerts_sent"] = sent_rt
+    elif notifications_enabled:
+        for offer in pending_single_alerts:
+            if send_alert(offer):
+                summary["alerts_sent"] += 1
 
     log.info("Scan complete: %s", summary)
     return summary

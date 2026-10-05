@@ -13,10 +13,42 @@ jobs:
     runs-on: ubuntu-latest
     # Exact-date CTS monitoring adds dozens of browser-backed searches per run.
     timeout-minutes: 40
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate runtime configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
+          FLIGHT_SOURCES: ${{ vars.FLIGHT_SOURCES }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in DATABASE_URL DISCORD_WEBHOOK_URL FLIGHT_SOURCES; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing required runtime configuration: ${missing[*]}"
+            exit 1
+          fi
+
+          normalised_sources=$(printf '%s' "$FLIGHT_SOURCES" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          case ",$normalised_sources," in
+            *,travelpayouts,*)
+              [ -n "${TRAVELPAYOUTS_TOKEN:-}" ] || {
+                echo "TRAVELPAYOUTS_TOKEN is required when FLIGHT_SOURCES includes travelpayouts"
+                exit 1
+              }
+              ;;
+          esac
+          case ",$normalised_sources," in
+            *,mock,*)
+              echo "FLIGHT_SOURCES must not include the synthetic mock source"
+              exit 1
+              ;;
+          esac
 
       - uses: actions/setup-python@v5
         with:
@@ -26,6 +58,12 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: pip install -r requirements.txt
+
+      - name: Run backend tests
+        env:
+          DATABASE_URL: sqlite:////tmp/flight-radar-tests.db
+          FLIGHT_SOURCES: mock
+        run: PYTHONPATH=backend python -m unittest discover -s backend/tests -v
 
       - name: Install Playwright browsers
         run: python -m playwright install --with-deps chromium
@@ -40,14 +78,6 @@ jobs:
           TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
           TRAVELPAYOUTS_MARKER: ${{ vars.TRAVELPAYOUTS_MARKER }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-          FLIGHT_SOURCES: ${{ vars.FLIGHT_SOURCES || 'mock' }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL || 'sqlite:///./flights.db' }}
+          FLIGHT_SOURCES: ${{ vars.FLIGHT_SOURCES }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/scan.py
-
-      - name: Commit price history
-        run: |
-          git config user.name "flight-radar-bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add flights.db || true
-          git diff --cached --quiet || git commit -m "chore: update price history [skip ci]"
-          git push
