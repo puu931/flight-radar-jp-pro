@@ -237,6 +237,41 @@ class HokkaidoMonitorTests(unittest.TestCase):
                 scan_all(notify=True, today=date(2026, 10, 14))
         notifier.assert_not_called()
 
+    def test_legacy_offers_with_no_deal_combinations_succeeds(self) -> None:
+        cfg = AppConfig.load(CONFIG_PATH)
+        # Keep only undated legacy routes: zero qualifying combinations is a
+        # legitimate no-deal result, not a source-health failure.
+        cfg.routes = [r for r in cfg.routes if not r.departure_end]
+        offer = FlightOffer(
+            source="test", airline="BR", flight_number="BR123",
+            origin="TPE", destination="NRT",
+            departure_at=datetime(2026, 11, 10, 10),
+            arrival_at=datetime(2026, 11, 10, 14),
+            duration_minutes=240, stops=0, price_twd=20_000,
+        )
+
+        class LiveSource:
+            name = "live-test"
+
+        class LiveAggregator:
+            sources = [LiveSource()]
+
+        with (
+            patch("app.scanner.get_config", return_value=cfg),
+            patch("app.scanner.Aggregator", return_value=LiveAggregator()),
+            patch("app.scanner._scan_route_direction", return_value=[offer]),
+            patch("app.scanner._persist_offers"),
+            patch("app.scanner._record_price_history"),
+            patch("app.scanner.build_round_trips", return_value=[]),
+            patch("app.scanner.send_round_trip_alert") as notifier,
+        ):
+            summary = scan_all(notify=True, today=date(2026, 11, 2))
+
+        self.assertGreater(summary["total_offers"], 0)
+        self.assertEqual(summary["round_trips"], 0)
+        self.assertEqual(summary["round_trip_alerts_sent"], 0)
+        notifier.assert_not_called()
+
     def test_config_has_requested_monitor(self) -> None:
         cfg = AppConfig.load(CONFIG_PATH)
         route = next(r for r in cfg.routes if (r.origin, r.destination) == ("TPE", "CTS"))
