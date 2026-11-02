@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -26,6 +27,13 @@ class Route:
     stay_days: list[int] = field(default_factory=list)
     alert_below: int = 0
     top_n_alerts: int = 0
+
+
+def route_is_active(route: Route, today: date) -> bool:
+    """Whether a route still has a departure date the scanner can search."""
+    if not route.departure_end:
+        return True
+    return date.fromisoformat(route.departure_end) > today
 
 
 @dataclass

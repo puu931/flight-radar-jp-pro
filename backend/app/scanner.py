@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete
 
-from .config import AppConfig, Route, get_config
+from .config import AppConfig, Route, get_config, route_is_active
 from .db import session_scope
 from .filters import passes_filters
 from .models import Flight, PriceHistory
@@ -110,8 +110,9 @@ def _scan_route_direction(
     return found
 
 
-def scan_all(notify: bool = True) -> dict:
+def scan_all(notify: bool = True, *, today: date | None = None) -> dict:
     scan_started_at = datetime.utcnow()
+    scan_date = today or date.today()
     cfg = get_config()
     aggregator = Aggregator()
     # Mock fares are synthetic and must never reach a real notification channel.
@@ -131,6 +132,17 @@ def scan_all(notify: bool = True) -> dict:
     is_round_trip = cfg.trip.type == "round_trip"
 
     for route in cfg.routes:
+        active = route_is_active(route, scan_date)
+        if not active:
+            summary["routes"].append({
+                "route": f"{route.origin}-{route.destination}",
+                "active": False,
+                "skip_reason": "departure_window_expired",
+                "out_offers": 0,
+                "in_offers": 0,
+                "single_leg_alerts_sent": 0,
+            })
+            continue
         departure_start = date.fromisoformat(route.departure_start) if route.departure_start else None
         departure_end = date.fromisoformat(route.departure_end) if route.departure_end else None
         stay_days = route.stay_days or cfg.trip.stay_days
@@ -167,6 +179,8 @@ def scan_all(notify: bool = True) -> dict:
 
         summary["routes"].append({
             "route": f"{route.origin}-{route.destination}",
+            "active": True,
+            "skip_reason": None,
             "out_offers": len(out_offers),
             "in_offers": len(in_offers),
             "single_leg_alerts_sent": sent,
@@ -174,11 +188,12 @@ def scan_all(notify: bool = True) -> dict:
         summary["alerts_sent"] += sent
 
     summary["total_offers"] = len(all_offers)
-    if summary["total_offers"] <= 0:
+    active_routes = [route for route in cfg.routes if route_is_active(route, scan_date)]
+    if active_routes and summary["total_offers"] <= 0:
         raise ScanHealthError("scan returned no flight offers")
 
     for route, route_summary in zip(cfg.routes, summary["routes"]):
-        required = bool(
+        required = route_summary["active"] and bool(
             route.departure_start or route.departure_end
             or route.alert_below or route.top_n_alerts
         )
@@ -193,16 +208,18 @@ def scan_all(notify: bool = True) -> dict:
 
     # Round-trip pairing + top-N alerts
     if is_round_trip:
-        round_trips = build_round_trips(cfg, fetched_at=scan_started_at)
+        round_trips = build_round_trips(
+            cfg, fetched_at=scan_started_at, today=scan_date,
+        )
         summary["round_trips"] = len(round_trips)
-        if summary["round_trips"] <= 0:
+        if active_routes and summary["round_trips"] <= 0:
             raise ScanHealthError("round-trip scan produced no combinations")
         routes_with_combos = {
             (round_trip.origin, round_trip.destination)
             for round_trip in round_trips
         }
         for route in cfg.routes:
-            required = bool(
+            required = route_is_active(route, scan_date) and bool(
                 route.departure_start or route.departure_end
                 or route.alert_below or route.top_n_alerts
             )
@@ -215,6 +232,8 @@ def scan_all(notify: bool = True) -> dict:
         if notifications_enabled:
             legacy_routes: list[tuple[str, str]] = []
             for route in cfg.routes:
+                if not route_is_active(route, scan_date):
+                    continue
                 if route.alert_below or route.top_n_alerts:
                     cheap = below_price_for_route(
                         route.origin, route.destination, route.alert_below,

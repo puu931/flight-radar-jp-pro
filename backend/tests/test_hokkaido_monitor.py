@@ -11,7 +11,7 @@ from unittest.mock import patch
 os.environ["DATABASE_URL"] = f"sqlite:////tmp/flight-radar-tests-{os.getpid()}.db"
 os.environ["FLIGHT_SOURCES"] = "mock"
 
-from app.config import AppConfig, CONFIG_PATH
+from app.config import AppConfig, CONFIG_PATH, Route, route_is_active
 from app.db import init_db, session_scope
 from app.models import Flight, RoundTrip
 from app.notifier import required_delivery_succeeded, round_trip_itinerary_fingerprint
@@ -60,6 +60,58 @@ class ExactSource:
 
 
 class HokkaidoMonitorTests(unittest.TestCase):
+    def test_expired_dated_route_is_inactive(self) -> None:
+        route = Route(
+            origin="TPE", destination="CTS", max_price=10_000,
+            departure_start="2026-10-10", departure_end="2026-10-31",
+        )
+        self.assertFalse(route_is_active(route, date(2026, 10, 31)))
+        self.assertFalse(route_is_active(route, date(2026, 11, 2)))
+
+    def test_expired_route_is_skipped_but_remains_visible_in_summary(self) -> None:
+        cfg = AppConfig.load(CONFIG_PATH)
+        cfg.routes = [
+            next(r for r in cfg.routes if (r.origin, r.destination) == ("TPE", "CTS"))
+        ]
+
+        class NoSearchAggregator:
+            sources = [SimpleNamespace(name="mock")]
+
+            def search(self, *_args, **_kwargs):
+                raise AssertionError("expired route must not call a flight source")
+
+        with (
+            patch("app.scanner.get_config", return_value=cfg),
+            patch("app.scanner.Aggregator", return_value=NoSearchAggregator()),
+            patch("app.scanner.build_round_trips", return_value=[]) as build,
+            patch("app.scanner.send_round_trip_alert") as notifier,
+        ):
+            summary = scan_all(notify=True, today=date(2026, 11, 2))
+
+        self.assertEqual(summary["total_offers"], 0)
+        self.assertEqual(summary["round_trips"], 0)
+        self.assertEqual(summary["routes"], [{
+            "route": "TPE-CTS",
+            "active": False,
+            "skip_reason": "departure_window_expired",
+            "out_offers": 0,
+            "in_offers": 0,
+            "single_leg_alerts_sent": 0,
+        }])
+        build.assert_called_once()
+        notifier.assert_not_called()
+
+    def test_future_dated_route_is_active(self) -> None:
+        route = Route(
+            origin="TPE", destination="CTS", max_price=10_000,
+            departure_start="2026-10-10", departure_end="2026-10-31",
+        )
+        self.assertTrue(route_is_active(route, date(2026, 10, 30)))
+
+    def test_undated_legacy_route_remains_active(self) -> None:
+        route = Route(origin="TPE", destination="NRT", max_price=10_000)
+        self.assertTrue(route_is_active(route, date(2099, 1, 1)))
+
     def test_build_round_trips_ignores_stale_flights(self) -> None:
         init_db()
         scan_started_at = datetime.utcnow()
@@ -75,7 +127,11 @@ class HokkaidoMonitorTests(unittest.TestCase):
             db.execute(delete(Flight))
             db.add_all([stale_out, stale_in, fresh_out, fresh_in])
 
-        rows = build_round_trips(AppConfig.load(CONFIG_PATH), fetched_at=scan_started_at)
+        rows = build_round_trips(
+            AppConfig.load(CONFIG_PATH),
+            fetched_at=scan_started_at,
+            today=date(2026, 10, 14),
+        )
 
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0].origin, rows[0].destination), ("TPE", "CTS"))
@@ -114,7 +170,7 @@ class HokkaidoMonitorTests(unittest.TestCase):
             patch("app.scanner.send_round_trip_alert") as notifier,
         ):
             with self.assertRaisesRegex(ScanHealthError, "required route TPE-CTS"):
-                scan_all(notify=True)
+                scan_all(notify=True, today=date(2026, 10, 14))
         notifier.assert_not_called()
 
     def test_empty_scan_fails_before_any_notifier(self) -> None:
@@ -135,7 +191,7 @@ class HokkaidoMonitorTests(unittest.TestCase):
             patch("app.scanner.send_round_trip_alert") as round_trip_notifier,
         ):
             with self.assertRaisesRegex(ScanHealthError, "no flight offers"):
-                scan_all(notify=True)
+                scan_all(notify=True, today=date(2026, 10, 14))
         one_way_notifier.assert_not_called()
         round_trip_notifier.assert_not_called()
 
@@ -178,7 +234,7 @@ class HokkaidoMonitorTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ScanHealthError, "required route TPE-CTS produced no round-trip",
             ):
-                scan_all(notify=True)
+                scan_all(notify=True, today=date(2026, 10, 14))
         notifier.assert_not_called()
 
     def test_config_has_requested_monitor(self) -> None:
