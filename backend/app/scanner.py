@@ -212,8 +212,6 @@ def scan_all(notify: bool = True, *, today: date | None = None) -> dict:
             cfg, fetched_at=scan_started_at, today=scan_date,
         )
         summary["round_trips"] = len(round_trips)
-        if active_routes and summary["round_trips"] <= 0:
-            raise ScanHealthError("round-trip scan produced no combinations")
         routes_with_combos = {
             (round_trip.origin, round_trip.destination)
             for round_trip in round_trips
