@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Iterable
 
 from sqlalchemy import delete, select
 
-from .config import AppConfig, Route
+from .config import AppConfig, Route, route_is_active
 from .db import session_scope
 from .models import Flight, RoundTrip, RoundTripHistory
 
@@ -60,7 +60,12 @@ def pair_route(
     return combos
 
 
-def build_round_trips(cfg: AppConfig, *, fetched_at: datetime) -> list[RoundTrip]:
+def build_round_trips(
+    cfg: AppConfig,
+    *,
+    fetched_at: datetime,
+    today: date | None = None,
+) -> list[RoundTrip]:
     """Generate round trips from rows fetched by the current scan only.
 
     Wipes existing round_trips table before writing fresh combinations.
@@ -71,7 +76,14 @@ def build_round_trips(cfg: AppConfig, *, fetched_at: datetime) -> list[RoundTrip
         # Reset
         db.execute(delete(RoundTrip))
 
+        scan_date = today or date.today()
         for route in cfg.routes:
+            if not route_is_active(route, scan_date):
+                log.info(
+                    "RoundTrip %s↔%s: skipped expired departure window ending %s",
+                    route.origin, route.destination, route.departure_end,
+                )
+                continue
             departure_start = (
                 datetime.fromisoformat(route.departure_start).date()
                 if route.departure_start else None
