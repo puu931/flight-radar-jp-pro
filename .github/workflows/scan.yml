@@ -10,11 +10,12 @@ on:
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    # Playwright 1.48 supports Ubuntu 22.04; avoid ubuntu-latest image migrations.
+    runs-on: ubuntu-22.04
     # Exact-date CTS monitoring adds dozens of browser-backed searches per run.
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate runtime configuration
         env:
@@ -50,7 +51,7 @@ jobs:
               ;;
           esac
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -66,7 +67,19 @@ jobs:
         run: PYTHONPATH=backend python -m unittest discover -s backend/tests -v
 
       - name: Install Playwright browsers
-        run: python -m playwright install --with-deps chromium
+        timeout-minutes: 8
+        run: |
+          for attempt in 1 2 3; do
+            if python -m playwright install --with-deps chromium; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Playwright installation failed after 3 attempts"
+              exit 1
+            fi
+            echo "Playwright installation failed; retrying in 10 seconds (attempt $attempt/3)"
+            sleep 10
+          done
 
       - name: Run scan
         env:
