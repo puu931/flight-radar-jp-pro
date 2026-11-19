@@ -18,6 +18,7 @@ from .round_trips import (
 )
 from .sources.aggregator import Aggregator
 from .sources.base import FlightOffer
+from .sources.google_flights import GoogleFlightsSource, SAMPLE_OFFSETS
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +163,31 @@ def scan_all(notify: bool = True, *, today: date | None = None) -> dict:
                 route.airlines,
                 bool(departure_start or departure_end),
             )
+            if not departure_start and not departure_end and route.stay_days:
+                # Align Google's sparse return samples with this route's stay lengths.
+                # Query only Google; other sources may already cover the full window.
+                sample_today = date.today()
+                return_offsets = {
+                    offset + stay
+                    for offset in SAMPLE_OFFSETS if offset <= cfg.search.future_days
+                    for stay in route.stay_days
+                } - set(SAMPLE_OFFSETS)
+                for source in aggregator.sources:
+                    if not isinstance(source, GoogleFlightsSource):
+                        continue
+                    for offset in sorted(return_offsets):
+                        offers = Aggregator([source]).search(
+                            route.destination, route.origin,
+                            sample_today + timedelta(days=offset), exact_date=True,
+                        )
+                        in_offers.extend(
+                            o for o in offers if passes_filters(o, cfg, route.airlines)
+                        )
+                in_offers = list({
+                    (o.source, o.airline, o.flight_number, o.origin, o.destination,
+                     o.departure_at, o.arrival_at, o.price_twd): o
+                    for o in in_offers
+                }.values())
             all_offers.extend(in_offers)
 
         # Commit per route so a kill/timeout mid-scan doesn't lose hours of work.

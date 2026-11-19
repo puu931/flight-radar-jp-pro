@@ -19,6 +19,7 @@ from app.round_trips import build_round_trips, pair_route, select_top_for_routes
 from app.scanner import ScanHealthError, notifications_are_safe, scan_all
 from app.sources.aggregator import Aggregator
 from app.sources.base import FlightOffer
+from app.sources.google_flights import GoogleFlightsSource, SAMPLE_OFFSETS
 from sqlalchemy import delete
 
 
@@ -60,6 +61,64 @@ class ExactSource:
 
 
 class HokkaidoMonitorTests(unittest.TestCase):
+    def test_rolling_google_return_samples_pair_without_expanding_other_routes(self) -> None:
+        today = date.today()
+        cfg = AppConfig.load(CONFIG_PATH)
+        cts = next(r for r in cfg.routes if r.destination == "CTS")
+        legacy = next(r for r in cfg.routes if r.destination == "NRT")
+        cfg.routes = [cts, legacy]
+        calls = []
+
+        class SampledGoogle(GoogleFlightsSource):
+            async def _scrape_async(self, origin, destination, departure_date):
+                calls.append((origin, destination, (departure_date - today).days))
+                return [FlightOffer(
+                    source=self.name, airline="JX", flight_number="JX850",
+                    origin=origin, destination=destination,
+                    departure_at=datetime.combine(departure_date, datetime.min.time()).replace(hour=10),
+                    arrival_at=datetime.combine(departure_date, datetime.min.time()).replace(hour=14),
+                    duration_minutes=240, stops=0, price_twd=9_000,
+                )] * 2
+
+        class OtherSource:
+            name = "other"
+
+            def search(self, origin, destination, departure_date):
+                self_calls.append((origin, destination, (departure_date - today).days))
+                return []
+
+        self_calls = []
+        source = SampledGoogle()
+        # The original seven points alone cannot form any 5/6/7-night pair.
+        self.assertFalse(any(b - a in cts.stay_days for a in SAMPLE_OFFSETS for b in SAMPLE_OFFSETS))
+        aggregator = Aggregator([source, OtherSource()])
+        init_db()
+        with session_scope() as db:
+            db.execute(delete(RoundTrip))
+            db.execute(delete(Flight))
+        with (
+            patch("app.scanner.get_config", return_value=cfg),
+            patch("app.scanner.Aggregator", side_effect=lambda sources=None: Aggregator(sources) if sources else aggregator),
+        ):
+            summary = scan_all(notify=False, today=today)
+        expected_returns = set(SAMPLE_OFFSETS) | {a + b for a in SAMPLE_OFFSETS for b in [5, 6, 7]}
+        self.assertEqual({n for o, d, n in calls if (o, d) == ("CTS", "TPE")}, expected_returns)
+        self.assertEqual(len([1 for o, d, _ in calls if (o, d) == ("CTS", "TPE")]), 28)
+        for route in [("TPE", "CTS"), ("TPE", "NRT"), ("NRT", "TPE")]:
+            self.assertEqual({n for o, d, n in calls if (o, d) == route}, set(SAMPLE_OFFSETS))
+        self.assertEqual(len(self_calls), 4 * 180)
+        self.assertLessEqual(max(n for _, _, n in self_calls), 180)
+        self.assertEqual(summary["routes"][0]["in_offers"], 28)
+        with session_scope() as db:
+            rows = db.query(RoundTrip).filter_by(destination="CTS").all()
+            self.assertEqual(len(rows), 21)
+            self.assertEqual({r.stay_days for r in rows}, {5, 6, 7})
+            self.assertTrue(any(
+                r.out_departure_at.date() == today + timedelta(days=180)
+                and r.return_departure_at.date() == today + timedelta(days=187)
+                for r in rows
+            ))
+
     def test_expired_dated_route_is_inactive(self) -> None:
         route = Route(
             origin="TPE", destination="CTS", max_price=10_000,
@@ -73,6 +132,8 @@ class HokkaidoMonitorTests(unittest.TestCase):
         cfg.routes = [
             next(r for r in cfg.routes if (r.origin, r.destination) == ("TPE", "CTS"))
         ]
+        cfg.routes[0].departure_start = "2026-10-10"
+        cfg.routes[0].departure_end = "2026-10-31"
 
         class NoSearchAggregator:
             sources = [SimpleNamespace(name="mock")]
@@ -239,9 +300,9 @@ class HokkaidoMonitorTests(unittest.TestCase):
 
     def test_legacy_offers_with_no_deal_combinations_succeeds(self) -> None:
         cfg = AppConfig.load(CONFIG_PATH)
-        # Keep only undated legacy routes: zero qualifying combinations is a
+        # Keep only legacy routes: zero qualifying combinations is a
         # legitimate no-deal result, not a source-health failure.
-        cfg.routes = [r for r in cfg.routes if not r.departure_end]
+        cfg.routes = [r for r in cfg.routes if not r.alert_below]
         offer = FlightOffer(
             source="test", airline="BR", flight_number="BR123",
             origin="TPE", destination="NRT",
@@ -277,7 +338,9 @@ class HokkaidoMonitorTests(unittest.TestCase):
         route = next(r for r in cfg.routes if (r.origin, r.destination) == ("TPE", "CTS"))
         self.assertEqual(route.airlines, ["BR", "JX"])
         self.assertEqual((route.departure_start, route.departure_end),
-                         ("2026-10-10", "2026-10-31"))
+                         ("", ""))
+        self.assertEqual(cfg.search.future_days, 180)
+        self.assertTrue(route_is_active(route, date(2099, 1, 1)))
         # Stored as return-date gaps (nights): 5/6/7 = 6/7/8 calendar days.
         self.assertEqual(route.stay_days, [5, 6, 7])
         self.assertEqual(route.alert_below, 20_000)
